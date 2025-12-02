@@ -11,12 +11,11 @@ import joblib  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.metrics import roc_auc_score, classification_report  # noqa: E402
 
+from hcp_model.config import load_config  # noqa: E402
+from hcp_model.logging_utils import get_logger  # noqa: E402
 from hcp_model.modeling import LABEL_COL  # noqa: E402
 
-
-MODEL_PATH = ROOT_DIR / "models" / "baseline_model.joblib"
-INPUT_PATH = ROOT_DIR / "data" / "processed" / "bookings_processed.csv"
-OUTPUT_PATH = ROOT_DIR / "data" / "processed" / "bookings_scored.csv"
+logger = get_logger("batch_score")
 
 
 def _risk_bucket(prob: float) -> str:
@@ -28,25 +27,30 @@ def _risk_bucket(prob: float) -> str:
 
 
 def main() -> None:
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(f"Model file not found at {MODEL_PATH}")
+    cfg = load_config(ROOT_DIR / "config" / "config.yaml")
 
-    print(f"Loading model from: {MODEL_PATH}")
-    model = joblib.load(MODEL_PATH)
+    model_path = ROOT_DIR / cfg.paths.model_dir / cfg.paths.model_file
+    input_path = ROOT_DIR / cfg.paths.processed_data
+    output_path = ROOT_DIR / cfg.paths.scored_data
 
-    print(f"Loading input data from: {INPUT_PATH}")
-    df = pd.read_csv(INPUT_PATH)
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found at {model_path}")
+
+    logger.info(f"Loading model from: {model_path}")
+    model = joblib.load(model_path)
+
+    logger.info(f"Loading input data from: {input_path}")
+    df = pd.read_csv(input_path)
 
     if LABEL_COL in df.columns:
-        print(f"Found label column '{LABEL_COL}' in input data.")
+        logger.info(f"Found label column '{LABEL_COL}' in input data.")
     else:
-        print(f"Label column '{LABEL_COL}' not found. Proceeding without evaluation.")
+        logger.info(f"Label column '{LABEL_COL}' not found. Proceeding without evaluation.")
 
-    # Features = all columns except label (if present)
     feature_cols = [c for c in df.columns if c != LABEL_COL]
     X = df[feature_cols]
 
-    print(f"Scoring {len(df)} rows...")
+    logger.info(f"Scoring {len(df)} rows...")
     proba = model.predict_proba(X)[:, 1]
     pred_labels = (proba >= 0.5).astype(int)
     risk_buckets = [_risk_bucket(p) for p in proba]
@@ -56,7 +60,6 @@ def main() -> None:
     df_out["pred_label"] = pred_labels
     df_out["risk_bucket"] = risk_buckets
 
-    # If we have true labels, print evaluation metrics as a sanity check
     if LABEL_COL in df.columns:
         y_true = df[LABEL_COL].astype(int)
         try:
@@ -64,14 +67,15 @@ def main() -> None:
         except ValueError:
             auc = float("nan")
 
-        print("\nEvaluation on input data (using existing labels):")
-        print(f"ROC AUC: {auc}")
-        print("\nClassification report:")
-        print(classification_report(y_true, pred_labels, zero_division=0))
+        logger.info("Evaluation on input data (using existing labels):")
+        logger.info(f"ROC AUC: {auc}")
+        logger.info(
+            "Classification report:\n" + classification_report(y_true, pred_labels, zero_division=0)
+        )
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df_out.to_csv(OUTPUT_PATH, index=False)
-    print(f"\nSaved scored data to: {OUTPUT_PATH}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df_out.to_csv(output_path, index=False)
+    logger.info(f"Saved scored data to: {output_path}")
 
 
 if __name__ == "__main__":

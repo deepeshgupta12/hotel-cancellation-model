@@ -33,14 +33,47 @@ class TrainConfig:
 
 def build_preprocessor(feature_df: pd.DataFrame) -> ColumnTransformer:
     """Build a ColumnTransformer for numeric + categorical features."""
-    # ID columns we don't want the model to use
-    id_cols = ["booking_id", "user_id", "hotel_id"]
-
-    # Label column
     label_col = LABEL_COL
 
-    # Candidate feature columns are everything except IDs + label
-    feature_cols = [c for c in feature_df.columns if c not in id_cols + [label_col]]
+    # Columns we NEVER want to use as features (IDs / PII etc.)
+    id_like_cols = [
+        "booking_id",
+        "user_id",
+        "hotel_id",
+        "Booking_ID",
+        "index",
+        "name",
+        "email",
+        "phone-number",
+        "credit_card",
+    ]
+
+    # Direct leakage or post-outcome columns
+    leakage_cols = [
+        # explicit label variants
+        "is_canceled",
+        "is_canceled_upd",
+        # status / final outcome fields
+        "booking status",
+        "reservation_status",
+        "reservation_status_date",
+        "reservation_status_upd",
+        "reservation_status_date_upd",
+    ]
+
+    # Raw date strings that would be one-hot encoded with huge cardinality
+    raw_date_cols = [
+        "date of reservation",
+    ]
+
+    exclude_cols = id_like_cols + leakage_cols + raw_date_cols
+
+    # Candidate feature columns = everything except label + excluded cols
+    feature_cols = [
+        c
+        for c in feature_df.columns
+        if c not in exclude_cols + [label_col]
+    ]
 
     # Simple heuristic: numeric vs categorical
     numeric_features = [
@@ -80,9 +113,15 @@ def build_preprocessor(feature_df: pd.DataFrame) -> ColumnTransformer:
 def train_models(
     df: pd.DataFrame,
     config: TrainConfig | None = None,
+    rf_params: Dict[str, object] | None = None,
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Pipeline]]:
     """
     Train a couple of baseline models and return metrics + fitted pipelines.
+
+    Args:
+        df: processed dataframe (includes LABEL_COL).
+        config: train/test split parameters.
+        rf_params: hyperparameters for RandomForestClassifier (dict).
 
     Returns:
         metrics: dict[model_name -> metric_name -> value]
@@ -90,6 +129,16 @@ def train_models(
     """
     if config is None:
         config = TrainConfig()
+
+    if rf_params is None:
+        rf_params = {
+            "n_estimators": 200,
+            "random_state": config.random_state,
+        }
+    else:
+        # Ensure random_state is always set for reproducibility
+        rf_params = dict(rf_params)
+        rf_params.setdefault("random_state", config.random_state)
 
     # Drop any rows without a label
     df = df[df[LABEL_COL].notna()].copy()
@@ -122,10 +171,7 @@ def train_models(
     rf_clf = Pipeline(
         steps=[
             ("preprocess", preprocessor),
-            ("model", RandomForestClassifier(
-                n_estimators=200,
-                random_state=config.random_state,
-            )),
+            ("model", RandomForestClassifier(**rf_params)),
         ]
     )
     models["random_forest"] = rf_clf

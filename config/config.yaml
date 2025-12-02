@@ -1,0 +1,18 @@
+paths:
+  raw_data: data/raw/booking.csv          # not really used now, but okay
+  processed_data: data/processed/master_bookings.csv
+  scored_data: data/processed/master_bookings_scored.csv
+  model_dir: models
+  model_file: baseline_model.joblib
+
+training:
+  test_size: 0.3
+  random_state: 42
+  target_column: is_cancelled
+
+model:
+  rf:
+    n_estimators: 200
+    max_depth: null
+    min_samples_split: 10
+    min_samples_leaf: 1

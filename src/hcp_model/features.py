@@ -12,11 +12,11 @@ def _compute_time_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     # Force these columns to proper datetime64[ns]
-    df["booking_datetime"] = pd.to_datetime(df["booking_datetime"], errors="coerce")
-    df["checkin_date"] = pd.to_datetime(df["checkin_date"], errors="coerce")
-    df["checkout_date"] = pd.to_datetime(df["checkout_date"], errors="coerce")
+    df["booking_datetime"] = pd.to_datetime(df.get("booking_datetime"), errors="coerce")
+    df["checkin_date"] = pd.to_datetime(df.get("checkin_date"), errors="coerce")
+    df["checkout_date"] = pd.to_datetime(df.get("checkout_date"), errors="coerce")
 
-    # Core time features (no .dt.date here)
+    # Core time features
     df["lead_time_days"] = (df["checkin_date"] - df["booking_datetime"]).dt.days
     df["length_of_stay_nights"] = (df["checkout_date"] - df["checkin_date"]).dt.days
 
@@ -44,20 +44,19 @@ def _filter_invalid_rows(df: pd.DataFrame) -> pd.DataFrame:
     df = df[df["lead_time_days"] >= 0]
     df = df[df["length_of_stay_nights"] > 0]
 
-    # Drop rows with missing label
-    df = df[df[LABEL_COL].notna()].copy()
-
     return df
 
 
 def make_basic_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     """
-    Take the raw bookings dataframe (as loaded by data_loader.load_bookings_csv)
-    and return a processed dataframe with engineered features, ready for modeling.
+    Training-time feature builder.
+
+    Takes the raw bookings dataframe (as loaded by data_loader.load_bookings_csv)
+    and returns a processed dataframe with engineered features **including** the label.
 
     This keeps:
-    - ID columns for reference (booking_id, user_id, hotel_id)
-    - Core categorical features
+    - ID columns (booking_id, user_id, hotel_id)
+    - Core categorical/numeric features
     - Time-based engineered features
     - Label column: is_cancelled
     """
@@ -66,12 +65,16 @@ def make_basic_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     # Compute time-based features
     df = _compute_time_features(df)
 
-    # Filter invalid rows
+    # Filter invalid rows (dates / durations)
     df = _filter_invalid_rows(df)
 
-    # Define columns to keep (for now we keep it fairly wide)
+    # Drop rows with missing label
+    if LABEL_COL in df.columns:
+        df = df[df[LABEL_COL].notna()].copy()
+
+    # Define columns to keep
     feature_cols: List[str] = [
-        # IDs (useful for debugging, but can be dropped at training time)
+        # IDs
         "booking_id",
         "user_id",
         "hotel_id",
@@ -98,9 +101,49 @@ def make_basic_features(df_raw: pd.DataFrame) -> pd.DataFrame:
         LABEL_COL,
     ]
 
-    # Intersect with available columns to be robust
     feature_cols = [c for c in feature_cols if c in df.columns]
+    df_out = df[feature_cols].reset_index(drop=True)
+    return df_out
 
+
+def make_features_for_inference(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Inference-time feature builder.
+
+    Takes a raw bookings dataframe (without label) and returns feature columns
+    matching what the trained model expects, **excluding** the label.
+    """
+    df = df_raw.copy()
+
+    # Compute time-based features and filter invalid rows
+    df = _compute_time_features(df)
+    df = _filter_invalid_rows(df)
+
+    # Columns expected by the model at inference time
+    feature_cols: List[str] = [
+        "booking_id",
+        "user_id",
+        "hotel_id",
+        "booking_channel",
+        "device_type",
+        "rate_plan",
+        "payment_status",
+        "booking_amount",
+        "currency",
+        "num_guests",
+        "num_rooms",
+        "user_country",
+        "status",
+        "no_show_flag",
+        "lead_time_days",
+        "length_of_stay_nights",
+        "booking_dow",
+        "booking_hour",
+        "checkin_dow",
+        "is_weekend_checkin",
+    ]
+
+    feature_cols = [c for c in feature_cols if c in df.columns]
     df_out = df[feature_cols].reset_index(drop=True)
 
     return df_out

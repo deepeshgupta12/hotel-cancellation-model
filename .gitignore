@@ -1,21 +1,25 @@
-# Virtual env
+# Python venv
 .venv/
 venv/
 
 # Python cache
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
+*.pyd
 
-# Jupyter
-.ipynb_checkpoints/
+# VS Code / IDE
+.vscode/
+.idea/
 
-# Data and models (large / sensitive)
+# OS files
+.DS_Store
+
+# Data & models (keep this repo code-focused)
 data/raw/
 data/processed/
 models/
 
-# OS / editor files
-.DS_Store
-.vscode/
-.idea/
+# Logs
+*.log
+logs/

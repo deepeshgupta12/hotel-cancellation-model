@@ -1,0 +1,19 @@
+{
+  "booking_id": "BKG-NEW-001",
+  "user_id": "U-NEW",
+  "hotel_id": "H-01",
+  "booking_datetime": "2025-01-01T09:15:00",
+  "checkin_date": "2025-02-10",
+  "checkout_date": "2025-02-12",
+  "booking_channel": "web",
+  "device_type": "desktop",
+  "rate_plan": "refundable",
+  "payment_status": "prepaid",
+  "booking_amount": 12000.0,
+  "currency": "INR",
+  "num_guests": 2,
+  "num_rooms": 1,
+  "user_country": "IN",
+  "status": "confirmed",
+  "no_show_flag": 0
+}

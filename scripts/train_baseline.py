@@ -8,6 +8,9 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import pandas as pd  # noqa: E402
+
+from hcp_model.config import load_config  # noqa: E402
+from hcp_model.logging_utils import get_logger  # noqa: E402
 from hcp_model.modeling import (  # noqa: E402
     LABEL_COL,
     TrainConfig,
@@ -16,36 +19,49 @@ from hcp_model.modeling import (  # noqa: E402
     train_models,
 )
 
+logger = get_logger("train_baseline")
+
 
 def main() -> None:
-    processed_path = ROOT_DIR / "data" / "processed" / "bookings_processed.csv"
-    models_dir = ROOT_DIR / "models"
-    model_path = models_dir / "baseline_model.joblib"
+    cfg = load_config(ROOT_DIR / "config" / "config.yaml")
 
-    print(f"Loading processed data from: {processed_path}")
+    processed_path = ROOT_DIR / cfg.paths.processed_data
+    model_dir = ROOT_DIR / cfg.paths.model_dir
+    model_path = model_dir / cfg.paths.model_file
+
+    logger.info(f"Loading processed data from: {processed_path}")
     df = pd.read_csv(processed_path)
 
-    print("Rows in processed dataset:", len(df))
-    print("Columns:", list(df.columns))
+    logger.info(f"Rows in processed dataset: {len(df)}")
+    logger.info(f"Columns: {list(df.columns)}")
 
-    # Basic sanity check on label
     if LABEL_COL not in df.columns:
         raise ValueError(f"Label column '{LABEL_COL}' not found in dataset")
 
-    print("\nLabel distribution:")
-    print(df[LABEL_COL].value_counts(dropna=False))
+    logger.info("Label distribution:")
+    logger.info(f"\n{df[LABEL_COL].value_counts(dropna=False)}")
 
-    config = TrainConfig(test_size=0.3, random_state=42)
+    train_conf = TrainConfig(
+        test_size=cfg.training.test_size,
+        random_state=cfg.training.random_state,
+    )
 
-    print("\nTraining baseline models...")
-    metrics, models = train_models(df, config=config)
+    rf_params = {
+        "n_estimators": cfg.model.rf.n_estimators,
+        "max_depth": cfg.model.rf.max_depth,
+        "min_samples_split": cfg.model.rf.min_samples_split,
+        "min_samples_leaf": cfg.model.rf.min_samples_leaf,
+    }
 
-    print("\nAll model metrics:")
+    logger.info("Training baseline models...")
+    metrics, models = train_models(df, config=train_conf, rf_params=rf_params)
+
+    logger.info("All model metrics:")
     for name, m in metrics.items():
-        print(f"- {name}: {m}")
+        logger.info(f"- {name}: {m}")
 
     best_name, best_model = select_best_model(metrics, models, metric_name="roc_auc")
-    print(f"\nSelected best model: {best_name}")
+    logger.info(f"Selected best model: {best_name}")
 
     save_model(best_model, model_path)
 
