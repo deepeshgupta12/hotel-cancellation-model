@@ -359,6 +359,3 @@ hotel-cancellation-model/
 │   └── cancellation_by_market_segment.png
 └── README.md
 ```
-
-You can rename this file to `README.md` and place it in the root of your repo,
-and copy the `hotel_readme_images/` folder alongside it.
