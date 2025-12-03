@@ -5,6 +5,13 @@ paths:
   model_dir: models
   model_file: baseline_model.joblib
 
+risk_thresholds:
+  # p_cancel < low_max        -> 'low'
+  # low_max <= p_cancel < medium_max -> 'medium'
+  # p_cancel >= medium_max    -> 'high'
+  low_max: 0.2
+  medium_max: 0.5
+
 training:
   test_size: 0.3
   random_state: 42

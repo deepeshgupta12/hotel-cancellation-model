@@ -1,97 +1,46 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Dict, Literal
 
 import joblib
+import logging
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from hcp_model.config import load_config
-from hcp_model.features import make_features_for_inference
-from hcp_model.risk import bucket_from_proba, RiskConfig
+from hcp_model.risk import RiskConfig, bucket_from_proba
+from hcp_model.predict_logger import PredictionLogger
+
+# -----------------------------------------------------------------------------
+# Config, logging, model paths
+# -----------------------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
 
 CONFIG = load_config()
 RISK_CFG = RiskConfig.from_dict(CONFIG.risk_thresholds)
+PRED_LOGGER = PredictionLogger()
 
-# Path to the saved model (baseline_model.joblib)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = PROJECT_ROOT / "models" / "baseline_model.joblib"
 
 
-class BookingFeatures(BaseModel):
-    """
-    Processed feature schema expected by the model.
-    Matches columns in data/processed/bookings_processed.csv, except the label.
-    """
-    booking_id: str
-    user_id: str
-    hotel_id: str
-
-    booking_channel: str
-    device_type: str
-    rate_plan: str
-    payment_status: str
-
-    booking_amount: float
-    currency: str
-
-    num_guests: int
-    num_rooms: int
-    user_country: str
-    status: str
-
-    no_show_flag: int = Field(..., description="0 or 1")
-
-    lead_time_days: int
-    length_of_stay_nights: int
-    booking_dow: int
-    booking_hour: int
-    checkin_dow: int
-    is_weekend_checkin: int
-
-
-class RawBooking(BaseModel):
-    """
-    Raw booking schema, closer to the actual transaction data.
-    Dates are ISO-8601 strings (e.g. '2025-02-10' or '2025-01-01T09:15:00').
-    """
-    booking_id: str
-    user_id: str
-    hotel_id: str
-
-    booking_datetime: str
-    checkin_date: str
-    checkout_date: str
-
-    booking_channel: str
-    device_type: str
-    rate_plan: str
-    payment_status: str
-
-    booking_amount: float
-    currency: str
-
-    num_guests: int
-    num_rooms: int
-    user_country: str
-
-    # New bookings are typically "confirmed" at creation time
-    status: str = "confirmed"
-
-    # At booking time, we don't know no-shows yet; default 0
-    no_show_flag: int = 0
-
-
 class PredictionResponse(BaseModel):
-    booking_id: str
+    """
+    Standard response for a single-booking prediction.
+    """
+    booking_id: str | None = None
     cancellation_probability: float
     predicted_label: int
     risk_bucket: Literal["low", "medium", "high"]
 
 
 def load_model():
+    """
+    Load the trained sklearn Pipeline from disk.
+    """
     if not MODEL_PATH.exists():
         raise FileNotFoundError(f"Model file not found at {MODEL_PATH}")
     model = joblib.load(MODEL_PATH)
@@ -100,73 +49,187 @@ def load_model():
 
 app = FastAPI(
     title="Hotel Booking Cancellation Prediction API",
-    version="0.1.0",
-    description="Predicts cancellation probability for hotel bookings using a trained ML model.",
+    version="0.2.0",
+    description=(
+        "Predicts cancellation probability for hotel bookings using the "
+        "trained Random Forest model over the master_bookings dataset."
+    ),
 )
 
-# Load model at startup
+# Load model once at startup
 MODEL = load_model()
 
+
+# -----------------------------------------------------------------------------
+# Health check
+# -----------------------------------------------------------------------------
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
 
 
-def _risk_bucket(prob: float) -> str:
-    if prob < 0.3:
-        return "low"
-    if prob < 0.7:
-        return "medium"
-    return "high"
+# -----------------------------------------------------------------------------
+# Feature alignment helper
+# -----------------------------------------------------------------------------
+
+def _prepare_features_from_payload(payload: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Take an arbitrary booking JSON (keys should ideally match training columns)
+    and align it to what the trained sklearn Pipeline expects.
+
+    - Ensures all expected columns exist.
+    - Fills missing numeric columns with 0.0.
+    - Fills missing categorical columns with 'Unknown'.
+    - Drops any extra columns not used by the model.
+
+    This is aligned with how the model was trained on `master_bookings.csv`.
+    """
+    # 1) One-row DataFrame from the incoming JSON
+    df = pd.DataFrame([payload])
+
+    # 2) Try to introspect the preprocessing step from the sklearn Pipeline
+    preprocess = None
+    if hasattr(MODEL, "named_steps"):
+        preprocess = MODEL.named_steps.get("preprocess")
+
+    if preprocess is not None and hasattr(preprocess, "feature_names_in_"):
+        expected_cols = list(preprocess.feature_names_in_)
+    else:
+        # Fallback: if we can't introspect, just use whatever comes in.
+        # This should still work if the pipeline itself handles column selection.
+        logger.warning(
+            "Could not introspect preprocess.feature_names_in_; "
+            "passing raw payload columns directly to the model."
+        )
+        return df
+
+    # 3) Figure out which columns the preprocessor treated as numeric vs categorical
+    numeric_cols = set()
+    categorical_cols = set()
+
+    if hasattr(preprocess, "transformers_"):
+        for name, _, cols in preprocess.transformers_:
+            # This relies on the naming used when building the ColumnTransformer
+            if name.startswith("num"):
+                numeric_cols.update(cols)
+            elif name.startswith("cat"):
+                categorical_cols.update(cols)
+
+    # 4) Add missing columns with sensible defaults
+    for col in expected_cols:
+        if col not in df.columns:
+            if col in numeric_cols:
+                df[col] = 0.0
+            elif col in categorical_cols:
+                df[col] = "Unknown"
+            else:
+                # Default to numeric-ish 0.0 if type is unknown;
+                # this is safer than None for most sklearn transformers.
+                df[col] = 0.0
+
+    # 5) Keep only the columns the model was actually trained on, in the right order
+    df = df[expected_cols]
+
+    return df
 
 
-@app.post("/predict", response_model=PredictionResponse)
-def predict(features: BookingFeatures) -> PredictionResponse:
-    # Convert input to DataFrame with a single row
-    df = pd.DataFrame([features.dict()])
-
-    proba = float(MODEL.predict_proba(df)[0, 1])
-    label = int(proba >= 0.5)
-    bucket = _risk_bucket(proba)
-
-    return PredictionResponse(
-        booking_id=features.booking_id,
-        cancellation_probability=proba,
-        predicted_label=label,
-        risk_bucket=bucket,
-    )
-
+# -----------------------------------------------------------------------------
+# Inference endpoint
+# -----------------------------------------------------------------------------
 
 @app.post("/predict_raw", response_model=PredictionResponse)
-def predict_raw(booking: RawBooking) -> PredictionResponse:
+def predict_raw(payload: Dict[str, Any]) -> PredictionResponse:
     """
-    End-to-end flow:
-    RawBooking (as it appears at booking time)
-      -> single-row DataFrame
-      -> feature engineering (make_features_for_inference)
-      -> model.predict_proba
-    """
-    raw_dict = booking.dict()
-    df_raw = pd.DataFrame([raw_dict])
+    Score a single booking using the trained model.
 
-    df_features = make_features_for_inference(df_raw)
+    Expects a JSON object where keys match (as closely as possible)
+    the columns used in training, i.e. the headers you see in
+    `data/processed/master_bookings.csv`.
+
+    Example shape (illustrative):
+
+    {
+      "booking_id": "BKG-123",
+      "hotel": "Resort Hotel",
+      "lead_time": 342,
+      "arrival_date_year": 2015,
+      "arrival_date_month": "July",
+      "arrival_date_week_number": 27,
+      "arrival_date_day_of_month": 1,
+      "stays_in_weekend_nights": 0,
+      "stays_in_week_nights": 0,
+      "adults": 2,
+      "children": 0,
+      "babies": 0,
+      "meal": "BB",
+      "country": "PRT",
+      "market_segment": "Direct",
+      "distribution_channel": "Direct",
+      "is_repeated_guest": 0,
+      "previous_cancellations": 0,
+      "previous_bookings_not_canceled": 0,
+      "reserved_room_type": "C",
+      "assigned_room_type": "C",
+      "booking_changes": 3,
+      "deposit_type": "No Deposit",
+      "agent": null,
+      "company": null,
+      "days_in_waiting_list": 0,
+      "customer_type": "Transient",
+      "adr": 0.0,
+      "required_car_parking_spaces": 0,
+      "total_of_special_requests": 0,
+      "total_nights": 0,
+      "total_guests": 2,
+      "adr_per_guest": 0.0,
+      "is_short_lead": 0,
+      "is_long_stay": 0,
+      "is_family": 0
+    }
+    """
+    # 1) Align incoming JSON to the expected feature space
+    df_features = _prepare_features_from_payload(payload)
 
     if df_features.empty:
         raise HTTPException(
             status_code=400,
-            detail="Input booking is invalid after feature processing (check dates and durations).",
+            detail="Input payload produced an empty feature frame. "
+                   "Check that keys roughly match training columns.",
         )
 
+    # 2) Predict probability of cancellation
     proba = float(MODEL.predict_proba(df_features)[0, 1])
-    pred_label = int(proba >= 0.5)
 
-    #Shared risk config / mapping
-    risk_cfg = RiskConfig()
-    risk_bucket = bucket_from_proba(proba, cfg=risk_cfg)
+    # Optional: configurable decision threshold; default 0.5
+    threshold = 0.5
+    model_cfg = getattr(CONFIG, "model", None)
+    if model_cfg is not None and getattr(model_cfg, "decision_threshold", None) is not None:
+        threshold = float(model_cfg.decision_threshold)
 
+    pred_label = int(proba >= threshold)
+
+    # 3) Map to risk bucket using shared risk thresholds
+    risk_bucket = bucket_from_proba(proba, cfg=RISK_CFG)
+
+    # 4) Best-effort prediction logging for monitoring / retraining
+    try:
+        model_version = getattr(model_cfg, "version", None) if model_cfg is not None else None
+
+        PRED_LOGGER.log_prediction(
+            booking_id=payload.get("booking_id"),
+            cancellation_probability=proba,
+            predicted_label=pred_label,
+            risk_bucket=risk_bucket,
+            model_version=model_version,
+            source="api",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to log prediction: {e}")
+
+    # 5) Return structured response
     return PredictionResponse(
-        booking_id=booking.booking_id,
+        booking_id=payload.get("booking_id"),
         cancellation_probability=round(proba, 3),
         predicted_label=pred_label,
         risk_bucket=risk_bucket,
