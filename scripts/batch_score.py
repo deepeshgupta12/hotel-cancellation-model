@@ -11,6 +11,7 @@ import joblib  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.metrics import roc_auc_score, classification_report  # noqa: E402
 
+from hcp_model.risk import bucket_from_proba, RiskConfig  # noqa: E402
 from hcp_model.config import load_config  # noqa: E402
 from hcp_model.logging_utils import get_logger  # noqa: E402
 from hcp_model.modeling import LABEL_COL  # noqa: E402
@@ -54,11 +55,16 @@ def main() -> None:
     proba = model.predict_proba(X)[:, 1]
     pred_labels = (proba >= 0.5).astype(int)
     risk_buckets = [_risk_bucket(p) for p in proba]
+    risk_cfg = RiskConfig()
+
 
     df_out = df.copy()
     df_out["pred_cancellation_proba"] = proba
     df_out["pred_label"] = pred_labels
     df_out["risk_bucket"] = risk_buckets
+    df["risk_bucket"] = [
+                            bucket_from_proba(p, cfg=risk_cfg) for p in proba
+                        ]
 
     if LABEL_COL in df.columns:
         y_true = df[LABEL_COL].astype(int)

@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from hcp_model.features import make_features_for_inference
-
+from hcp_model.risk import bucket_from_proba, RiskConfig
 
 # Path to the saved model (baseline_model.joblib)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -155,12 +155,15 @@ def predict_raw(booking: RawBooking) -> PredictionResponse:
         )
 
     proba = float(MODEL.predict_proba(df_features)[0, 1])
-    label = int(proba >= 0.5)
-    bucket = _risk_bucket(proba)
+    pred_label = int(proba >= 0.5)
+
+    #Shared risk config / mapping
+    risk_cfg = RiskConfig()
+    risk_bucket = bucket_from_proba(proba, cfg=risk_cfg)
 
     return PredictionResponse(
         booking_id=booking.booking_id,
-        cancellation_probability=proba,
-        predicted_label=label,
-        risk_bucket=bucket,
+        cancellation_probability=round(proba, 3),
+        predicted_label=pred_label,
+        risk_bucket=risk_bucket,
     )
