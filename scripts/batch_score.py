@@ -29,6 +29,7 @@ def _risk_bucket(prob: float) -> str:
 
 def main() -> None:
     cfg = load_config(ROOT_DIR / "config" / "config.yaml")
+    risk_cfg = RiskConfig.from_dict(cfg.risk_thresholds)
 
     model_path = ROOT_DIR / cfg.paths.model_dir / cfg.paths.model_file
     input_path = ROOT_DIR / cfg.paths.processed_data

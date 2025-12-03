@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import yaml
 
@@ -41,16 +41,31 @@ class AppConfig:
     paths: PathsConfig
     training: TrainingConfig
     model: ModelConfig
+    risk_thresholds: Optional[Dict[str, float]] = None
 
 
-def load_config(path: str | Path) -> AppConfig:
-    path = Path(path)
-    with path.open("r") as f:
+def load_config(config_path: Optional[Path] = None) -> AppConfig:
+    if config_path is None:
+        config_path = Path(__file__).resolve().parents[2] / "config" / "config.yaml"
+
+    with config_path.open("r") as f:
         raw = yaml.safe_load(f)
 
-    paths = PathsConfig(**raw["paths"])
-    training = TrainingConfig(**raw["training"])
-    rf_cfg = ModelRFConfig(**raw["model"]["rf"])
-    model = ModelConfig(rf=rf_cfg)
+    paths_cfg = PathsConfig(**raw["paths"])
+    model_cfg = ModelConfig(**raw["model"])
+    training_cfg = TrainingConfig(**raw["training"])
+    risk_thresholds = raw.get("risk_thresholds")  # may be None if not set
 
-    return AppConfig(paths=paths, training=training, model=model)
+    return AppConfig(
+        paths=paths_cfg,
+        model=model_cfg,
+        training=training_cfg,
+        risk_thresholds=risk_thresholds,
+    )
+
+
+
+
+
+
+    

@@ -8,8 +8,12 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from hcp_model.config import load_config
 from hcp_model.features import make_features_for_inference
 from hcp_model.risk import bucket_from_proba, RiskConfig
+
+CONFIG = load_config()
+RISK_CFG = RiskConfig.from_dict(CONFIG.risk_thresholds)
 
 # Path to the saved model (baseline_model.joblib)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
