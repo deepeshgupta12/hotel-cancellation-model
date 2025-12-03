@@ -10,9 +10,6 @@ This repository contains:
 - Batch scoring + REST API for online predictions
 - Config + logging so the project behaves like a real internal ML service
 
-> NOTE: Raw datasets are **not** committed to Git. You can plug in your own data
-> following the same schema and folder structure.
-
 ---
 
 ## 1. Problem Statement
