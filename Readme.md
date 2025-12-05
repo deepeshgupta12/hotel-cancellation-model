@@ -10,6 +10,9 @@ This repository contains:
 - Batch scoring + REST API for online predictions
 - Config + logging so the project behaves like a real internal ML service
 
+> NOTE: Raw datasets are **not** committed to Git. You can plug in your own data
+> following the same schema and folder structure.
+
 ---
 
 ## 1. Problem Statement
@@ -356,3 +359,6 @@ hotel-cancellation-model/
 │   └── cancellation_by_market_segment.png
 └── README.md
 ```
+
+You can rename this file to `README.md` and place it in the root of your repo,
+and copy the `hotel_readme_images/` folder alongside it.
