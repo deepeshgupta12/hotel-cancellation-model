@@ -1,361 +1,444 @@
-# Hotel Booking Cancellation Prediction Model
 
-End-to-end machine learning project for predicting hotel booking cancellations.
+# 🏨 Hotel Booking Cancellation Prediction Model
 
-This repository contains:
+An end-to-end, production-minded ML system that predicts **hotel booking cancellation probability** and assigns a **risk bucket** to support smarter B2C and revenue decisions.  
+Built to be practical, modular, and extensible — not just a notebook experiment.
 
-- Data pipelines to build a unified **master dataset** from multiple booking sources
-- Feature engineering for hotel bookings (lead time, stay pattern, guest stats, segment behaviour)
-- A scikit-learn model pipeline with preprocessing + RandomForest classifier
-- Batch scoring + REST API for online predictions
-- Config + logging so the project behaves like a real internal ML service
-
-> NOTE: Raw datasets are **not** committed to Git. You can plug in your own data
-> following the same schema and folder structure.
+**GitHub:** https://github.com/deepeshgupta12/hotel-cancellation-model
 
 ---
 
-## 1. Problem Statement
+## ✨ What this product does
 
-Hotels face significant revenue risk due to **late cancellations** and **no-shows**.
+This project delivers a full ML + API + diagnostics pipeline:
 
-The goal of this project is to:
-
-1. Predict the **probability that a booking will be cancelled**.
-2. Expose this as:
-   - A batch scoring process (for BI / risk dashboards)
-   - A REST API (`/predict_raw`) that takes a **single booking JSON** and returns:
-     - `cancellation_probability`
-     - binary label (`predicted_label`: cancel / not cancel)
-     - `risk_bucket` (low/medium/high)
-
-This can be used to:
-
-- Adjust overbooking strategies
-- Prioritize **high-risk bookings** for manual confirmation
-- Design CLM / messaging flows based on risk buckets
+✅ **Multi-source dataset unification** (3 CSVs → master dataset)  
+✅ **Feature engineering** (including derived behavioural and pricing features)  
+✅ **Baseline + improved model training**  
+✅ **RandomForest hyperparameter tuning**  
+✅ **Batch scoring with shared risk thresholds**  
+✅ **FastAPI service** with a **raw booking → features → predict** wrapper  
+✅ **Prediction logging** for observability  
+✅ **Model diagnostics** with plots for interpretability + slice-level sanity checks
 
 ---
 
-## 2. Data Sources
+## 🧩 The problem (in plain terms)
 
-The model is trained on **three datasets** under `data/raw/`:
+Cancellations are a silent revenue killer in hotel B2C:
 
-1. **`hotel_booking.csv`** – classic hotel booking dataset (Kaggle-style) with:
-   - `hotel`, `is_canceled`, `lead_time`
-   - `arrival_date_year`, `arrival_date_month`, `arrival_date_week_number`, `arrival_date_day_of_month`
-   - `stays_in_weekend_nights`, `stays_in_week_nights`
-   - `adults`, `children`, `babies`
-   - `meal`, `country`, `market_segment`, `distribution_channel`
-   - `is_repeated_guest`
-   - `previous_cancellations`, `previous_bookings_not_canceled`
-   - `reserved_room_type`, `assigned_room_type`
-   - `booking_changes`, `deposit_type`, `agent`, `company`
-   - `days_in_waiting_list`, `customer_type`
-   - `adr`, `required_car_parking_spaces`, `total_of_special_requests`
-   - `reservation_status`, `reservation_status_date`
+- Booking intent is high at checkout, but commitment is uncertain.
+- Late cancellations damage occupancy planning.
+- Overbooking decisions become riskier without reliable signals.
+- Marketing, inventory, and support teams all work with partial visibility.
 
-2. **`updated_hotel_data.csv`** – enrichment keyed by `index`, providing:
-   - `cancellation_rate_by_month`
-   - `cancellation_rate_by_leadtime`
-   - `cancellation_rate_by_deposit`
-   - plus `total_bookings` and `total_cancellations` variants
-
-3. **`booking.csv`** – custom booking dataset with:
-   - `Booking_ID`, `booking status`
-   - `number of adults`, `number of children`
-   - `number of weekend nights`, `number of week nights`
-   - `type of meal`
-   - `car parking space`
-   - `room type`
-   - `lead time`
-   - `market segment type`
-   - `repeated`
-   - `P-C`, `P-not-C`
-   - `average price`
-   - `special requests`
-   - `date of reservation`
-
-### Unified label
-
-Across all sources, we define a single label:
-
-- **`is_cancelled`** (0 = not cancelled, 1 = cancelled)
-  - For hotel_booking: `is_cancelled = is_canceled`
-  - For booking.csv: `is_cancelled = 1` if `booking status == 'Canceled'`, else `0`
+**The gap:** Hotels often react *after* cancellations happen.  
+**The opportunity:** Predict risk *at booking time* and act early.
 
 ---
 
-## 3. Data Pipeline & Master Dataset
+## 🚀 The solution
 
-Script: **`scripts/build_master_dataset.py`**
+We predict cancellation risk and translate it into operationally usable buckets:
 
-Steps:
+- **Low risk** ✅  
+- **Medium risk** ⚠️  
+- **High risk** 🔥  
 
-1. Load all three raw CSVs from `data/raw/`.
-2. Deduplicate `updated_hotel_data.csv` by `index` and join onto `hotel_booking.csv`.
-3. Normalize labels to `is_cancelled` in both families of data.
-4. Add a `source_dataset` flag to track origin.
-5. Derive additional booking features (see next section).
-6. Append enriched Kaggle data + booking.csv rows.
-7. Filter to rows where `is_cancelled` is not null.
-8. Save final combined file:
+This enables:
 
-   ```text
-   data/processed/master_bookings.csv
-   ```
-
-Result: ~155k bookings and 100+ columns in a single master file.
+- smarter confirmation strategies  
+- dynamic pricing guardrails  
+- targeted re-engagement  
+- channel-specific policy design  
+- better overbooking confidence
 
 ---
 
-## 4. Feature Engineering
-
-### 4.1 Raw features (Kaggle-style)
-
-- `lead_time`, `arrival_date_*`
-- `stays_in_weekend_nights`, `stays_in_week_nights`
-- `adults`, `children`, `babies`
-- `meal`, `country`, `market_segment`, `distribution_channel`
-- `is_repeated_guest`
-- `previous_cancellations`, `previous_bookings_not_canceled`
-- `reserved_room_type`, `assigned_room_type`
-- `booking_changes`, `deposit_type`
-- `days_in_waiting_list`, `customer_type`
-- `adr`, `required_car_parking_spaces`, `total_of_special_requests`
-
-### 4.2 Raw features (booking.csv)
-
-- `lead time`, `market segment type`
-- `number of weekend nights`, `number of week nights`
-- `number of adults`, `number of children`
-- `type of meal`, `room type`
-- `car parking space`, `repeated`
-- `average price`, `special requests`
-
-### 4.3 Aggregate risk features (updated_hotel_data)
-
-- `cancellation_rate_by_deposit`
-- `cancellation_rate_by_leadtime`
-- `cancellation_rate_by_month`
-- associated `total_bookings` and `total_cancellations` measures
-
-### 4.4 Derived booking-time features
-
-For Kaggle-style data:
-
-- `total_nights = stays_in_weekend_nights + stays_in_week_nights`
-- `total_guests = adults + children + babies`
-- `adr_per_guest = adr / max(total_guests, 1)`
-- `is_short_lead = 1 if lead_time <= 2 else 0`
-- `is_long_stay = 1 if total_nights >= 7 else 0`
-- `is_family = 1 if (children > 0 or total_guests >= 3) else 0`
-
-For booking.csv data:
-
-- `total_nights = number of weekend nights + number of week nights`
-- `total_guests = number of adults + number of children`
-- `adr_per_guest = average price / max(total_guests, 1)`
-
-### 4.5 Leakage prevention
-
-We do **not** use:
-
-- PII: `Booking_ID`, `name`, `email`, `phone-number`, `credit_card`
-- Outcome-like fields: `is_canceled`, `is_canceled_upd`, `booking status`
-- Post-outcome fields: `reservation_status`, `reservation_status_date`
-
-Only booking-time-safe features + historical aggregates are used.
-
----
-
-## 5. Exploratory Insights (Graphs)
-
-The following plots are generated from the combined dataset and saved under
-`hotel_readme_images/`.
-
-### 5.1 Overall cancellation distribution
-
-File: `hotel_readme_images/cancellation_distribution.png`
-
-Shows 0 vs 1 counts for `is_cancelled` (class balance).
-
-### 5.2 Cancellation rate by lead time
-
-File: `hotel_readme_images/cancellation_by_lead_time.png`
-
-Lead time buckets:
-
-- `0-2`, `3-7`, `8-30`, `31-90`, `91-365`, `365+` days
-
-### 5.3 Cancellation rate by length of stay
-
-File: `hotel_readme_images/cancellation_by_nights.png`
-
-Length-of-stay buckets:
-
-- `1`, `2-3`, `4-7`, `8-14`, `15+` nights
-
-### 5.4 Cancellation rate by market segment
-
-File: `hotel_readme_images/cancellation_by_market_segment.png`
-
-Top 8 market segments ranked by cancellation rate.
-
-These graphs can be referenced directly in the GitHub README as:
-
-```markdown
-![Overall Cancellation Distribution](hotel_readme_images/cancellation_distribution.png)
-![Cancellation Rate by Lead Time Bucket](hotel_readme_images/cancellation_by_lead_time.png)
-![Cancellation Rate by Length of Stay](hotel_readme_images/cancellation_by_nights.png)
-![Cancellation Rate by Market Segment](hotel_readme_images/cancellation_by_market_segment.png)
-```
-
----
-
-## 6. Model Architecture
-
-Implemented in `src/hcp_model/modeling.py` as a scikit-learn `Pipeline`:
+## 🏗️ Project structure
 
 ```text
-[Raw DataFrame] → [ColumnTransformer(preprocess)] → [RandomForestClassifier]
+hotel-cancellation-model/
+├── data/
+│   ├── raw/
+│   │   ├── booking.csv
+│   │   ├── hotel_booking.csv
+│   │   └── updated_hotel_data.csv
+│   └── processed/
+│       ├── master_bookings.csv
+│       └── master_bookings_scored.csv
+├── models/
+│   └── baseline_model.joblib
+├── reports/
+│   └── diagnostics/
+│       ├── feature_importances.png
+│       ├── risk_bucket_distribution.png
+│       ├── slice_country_cancel_vs_pred.png
+│       ├── slice_customer_type_cancel_vs_pred.png
+│       ├── slice_deposit_type_cancel_vs_pred.png
+│       ├── slice_distribution_channel_cancel_vs_pred.png
+│       ├── slice_hotel_cancel_vs_pred.png
+│       ├── slice_market_segment_cancel_vs_pred.png
+│       └── slice_source_dataset_cancel_vs_pred.png
+├── scripts/
+│   ├── build_master_dataset.py
+│   ├── train_baseline.py
+│   ├── tune_random_forest.py
+│   ├── batch_score.py
+│   └── diagnostics_feature_and_slices.py
+├── src/
+│   └── hcp_model/
+│       ├── api.py
+│       ├── config.py
+│       ├── features.py
+│       ├── risk.py
+│       └── predict_logger.py
+├── configs/
+│   └── config.yaml
+├── Readme.md
+├── model_diagnostics.md
+└── requirements.txt
 ```
 
-### 6.1 Preprocessing
+---
 
-- Numeric columns:
-  - `SimpleImputer(strategy="median")`
-  - `StandardScaler`
-- Categorical columns:
-  - `SimpleImputer(strategy="most_frequent")`
-  - `OneHotEncoder(handle_unknown="ignore", sparse_output=False)`
+## 🧠 Data sources & master dataset
 
-### 6.2 Classifier (RandomForest)
+We merged three datasets into a unified master file while preserving columns:
 
-Configured via `config/config.yaml` (simplified):
+1. **booking.csv**  
+2. **hotel_booking.csv**  
+3. **updated_hotel_data.csv** (used as enrichment where it matched the base index)
+
+Your Step 8 output confirms:
+
+- **Master dataset shape:** **(155,675 rows, 105 columns)**  
+- **Label distribution (`is_cancelled`):**  
+  - 0 → **99,562**  
+  - 1 → **56,113**
+
+📌 Output file:  
+`data/processed/master_bookings.csv`
+
+---
+
+## 🛠️ Tech stack
+
+### Core ML
+- Python 3.10+
+- Pandas, NumPy
+- scikit-learn
+- joblib
+
+### Backend/API
+- FastAPI
+- Uvicorn
+- Pydantic
+
+### Observability & config
+- YAML-based configs
+- Python `logging`
+- Lightweight prediction logger
+
+### Diagnostics
+- Matplotlib
+
+---
+
+## 🧪 Features (current phase)
+
+We moved beyond a toy baseline and added richer signals such as:
+
+- `total_nights`  
+- `total_guests`  
+- `adr_per_guest`  
+- `is_short_lead`  
+- `is_long_stay`  
+- `is_family`
+
+These features were designed for interpretability and business relevance.
+
+---
+
+## 📈 Model performance (your latest verified runs)
+
+### Train/validation metrics (baseline + improved features)
+
+You observed stable, realistic performance after tightening the training logic:
+
+- **RandomForest (selected best)**  
+  - Accuracy around **0.88** on holdout  
+  - ROC AUC around **0.95** range on validation runs  
+  - Strong class-level balance vs early overfit-looking numbers
+
+### Full-dataset evaluation (batch score on master)
+
+After scoring:
+
+- **ROC AUC:** **0.9833**  
+- Strong classification report with high precision/recall across labels  
+📌 Output file:  
+`data/processed/master_bookings_scored.csv`
+
+> Note: We intentionally improved the training pipeline to reduce leakage and avoid “too-perfect” early results. ✅
+
+---
+
+## 🔧 Hyperparameter tuning
+
+Your tuning run produced:
+
+**Best ROC AUC:** **0.9380**  
+**Best params:**
+```json
+{
+  "model__n_estimators": 200,
+  "model__min_samples_split": 10,
+  "model__min_samples_leaf": 1,
+  "model__max_features": 0.5,
+  "model__max_depth": 20,
+  "model__bootstrap": false
+}
+```
+
+We also tested `max_depth = null` to increase generalization and improve real-world stability.
+
+---
+
+## 🧯 Risk buckets
+
+Risk bucketing is centralized and shared across:
+
+- batch scoring  
+- API responses  
+- prediction logs  
+
+Defined in config (example pattern):
 
 ```yaml
-model:
-  rf:
-    n_estimators: 200
-    max_depth: null
-    min_samples_split: 2
-    min_samples_leaf: 1
+risk_thresholds:
+  low: 0.30
+  medium: 0.70
 ```
 
-Logistic Regression is also trained as a baseline, but RandomForest is used as
-the main production model.
-
 ---
 
-## 7. Training, Evaluation & Scoring
+## 🌐 FastAPI service
 
-### 7.1 Training (scripts/train_baseline.py)
-
-1. Load `data/processed/master_bookings.csv`.
-2. Split into train/test (`test_size=0.3`).
-3. Train Logistic Regression and RandomForest.
-4. Evaluate using Accuracy, F1, ROC AUC, and full classification report.
-5. Select the best model by ROC AUC and save to:
-
-   ```text
-   models/baseline_model.joblib
-   ```
-
-### 7.2 Typical metrics (RandomForest)
-
-On a held-out test set (approx 30% of data):
-
-- Accuracy: ~0.88–0.89
-- F1 (macro): ~0.83
-- ROC AUC: ~0.95
-
-On the full dataset (for reference only):
-
-- Accuracy: ~0.94
-- ROC AUC: ~0.98
-
-### 7.3 Batch scoring (scripts/batch_score.py)
-
-1. Load `models/baseline_model.joblib`.
-2. Load `data/processed/master_bookings.csv`.
-3. Predict for each row:
-   - `pred_cancellation_proba`
-   - `pred_label`
-   - `risk_bucket`
-4. Save to:
-
-   ```text
-   data/processed/master_bookings_scored.csv
-   ```
-
----
-
-## 8. REST API
-
-Defined in `src/hcp_model/api.py` using FastAPI.
-
-### Endpoints
-
-- `GET /health` – simple JSON health check.
-
-- `POST /predict_raw` – takes a raw booking JSON and returns:
-
-  ```json
-  {
-    "booking_id": "BKG-NEW-001",
-    "cancellation_probability": 0.72,
-    "predicted_label": 1,
-    "risk_bucket": "high"
-  }
-  ```
-
-Internally, `predict_raw`:
-
-1. Parses the raw JSON.
-2. Applies the same feature engineering used at training time.
-3. Runs the RandomForest model.
-
-### Run locally
+### Start the API
 
 ```bash
+# From project root
 source .venv/bin/activate
 PYTHONPATH=src uvicorn hcp_model.api:app --reload
 ```
 
-Swagger UI will be available at `http://127.0.0.1:8000/docs`.
+### Endpoints
+
+- `GET /health`
+- `POST /predict_raw`
+
+### ✅ `/predict_raw` supports raw booking JSON
+
+**Example input:**
+
+```json
+{
+  "booking_id": "BKG-NEW-001",
+  "user_id": "U-NEW",
+  "hotel_id": "H-01",
+  "booking_datetime": "2025-01-01T09:15:00",
+  "checkin_date": "2025-02-10",
+  "checkout_date": "2025-02-12",
+  "booking_channel": "web",
+  "device_type": "desktop",
+  "rate_plan": "refundable",
+  "payment_status": "prepaid",
+  "booking_amount": 12000.0,
+  "currency": "INR",
+  "num_guests": 2,
+  "num_rooms": 1,
+  "user_country": "IN",
+  "status": "confirmed",
+  "no_show_flag": 0
+}
+```
+
+**Example output you validated:**
+
+```json
+{
+  "booking_id": "BKG-NEW-001",
+  "cancellation_probability": 0.281,
+  "predicted_label": 0,
+  "risk_bucket": "medium"
+}
+```
 
 ---
 
-## 9. Project Structure
+## 🧾 Prediction logging
 
-```text
-hotel-cancellation-model/
-├── config/
-│   └── config.yaml
-├── data/
-│   ├── raw/
-│   └── processed/
-├── models/
-├── scripts/
-│   ├── build_master_dataset.py
-│   ├── train_baseline.py
-│   ├── batch_score.py
-│   └── tune_random_forest.py    # optional hyperparam tuning
-├── src/
-│   └── hcp_model/
-│       ├── __init__.py
-│       ├── config.py
-│       ├── logging_utils.py
-│       ├── data_loader.py
-│       ├── features.py
-│       ├── modeling.py
-│       ├── scoring.py
-│       └── api.py
-├── hotel_readme_images/
-│   ├── cancellation_distribution.png
-│   ├── cancellation_by_lead_time.png
-│   ├── cancellation_by_nights.png
-│   └── cancellation_by_market_segment.png
-└── README.md
+The service logs predictions in a structured, lightweight manner for:
+
+- debugging
+- monitoring
+- future retraining corpuses
+
+This supports real-world ML operations without heavy infra.
+
+---
+
+## 🧪 Batch scoring
+
+```bash
+source .venv/bin/activate
+PYTHONPATH=src python scripts/batch_score.py
 ```
+
+This will:
+
+- load `models/baseline_model.joblib`
+- read `data/processed/master_bookings.csv`
+- add:
+  - `pred_cancellation_proba`
+  - `pred_label`
+  - `risk_bucket`
+- write:
+  - `data/processed/master_bookings_scored.csv`
+
+---
+
+## 🔍 Model diagnostics & interpretability
+
+Generate all diagnostic outputs:
+
+```bash
+source .venv/bin/activate
+PYTHONPATH=src python scripts/diagnostics_feature_and_slices.py
+```
+
+This produces graphs like:
+
+### 1. Feature importance 🧠  
+`reports/diagnostics/feature_importances.png`
+
+### 2. Risk bucket distribution 🚦  
+`reports/diagnostics/risk_bucket_distribution.png`
+
+### 3. Calibration sanity checks by slice 🎯  
+- country  
+- customer type  
+- deposit type  
+- distribution channel  
+- hotel type  
+- market segment  
+- source dataset
+
+These plots validate that **predicted probabilities track real cancellation rates** within critical business segments.
+
+📌 Detailed narrative:  
+See `model_diagnostics.md`
+
+---
+
+## 🧪 Local setup
+
+### 1) Create and activate environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+### 2) Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 🏭 Reproduce the full pipeline
+
+```bash
+# Step A: Build master dataset
+PYTHONPATH=src python scripts/build_master_dataset.py
+
+# Step B: Train baseline + improved features
+PYTHONPATH=src python scripts/train_baseline.py
+
+# Step C: Tune RF (optional but recommended)
+PYTHONPATH=src python scripts/tune_random_forest.py
+
+# Step D: Batch score full master file
+PYTHONPATH=src python scripts/batch_score.py
+
+# Step E: Generate diagnostics
+PYTHONPATH=src python scripts/diagnostics_feature_and_slices.py
+```
+
+---
+
+## 🎯 Product use cases
+
+### 1) Revenue management 📊
+- Adjust overbooking strategy based on risk distribution.
+- Set confidence thresholds for high-demand periods.
+
+### 2) CRM & retention 💬
+- Trigger proactive nudges for high-risk bookings.
+- Offer limited-time upgrade or price-lock incentives.
+
+### 3) Channel strategy 🧭
+- Apply tighter policies on risk-heavy channels.
+- Work with OTA partners using data-backed cancellation patterns.
+
+### 4) Ops allocation 🧑‍💼
+- Focus human confirmation effort on high risk.
+- Reduce manual overhead for low-risk bookings.
+
+---
+
+## ⚠️ Things we consciously handled
+
+✅ Reduced **“too perfect” metrics** by tightening training logic  
+✅ Ensured **shared config** across scripts + API  
+✅ Added **feature alignment safeguards** for inference  
+✅ Strengthened slice-level trust with diagnostics
+
+---
+
+## 🧭 Next upgrades (Step 12+ roadmap)
+
+### Model improvements
+- Gradient boosting baselines (e.g., XGBoost/LightGBM)
+- Probability calibration (Platt/Isotonic)
+- Cost-sensitive learning aligned to revenue loss
+
+### Data & splitting
+- Strict time-aware train/val split based on reservation date
+- Drift checks by month/season
+
+### Productization
+- Dockerize the service
+- Add `/predict_batch` endpoint
+- Structured model registry & versioning
+
+### Business metrics
+- Estimate expected revenue saved per bucket
+- Compute lift from targeted interventions
+
+---
+
+## ✅ Status
+
+This project is now a solid **product-grade ML foundation** with:
+
+- real dataset scale  
+- robust pipelines  
+- explainability  
+- operational risk outputs  
+- and a live service layer
+
+Ready for scaling into a more advanced MLOps setup. 🚀
